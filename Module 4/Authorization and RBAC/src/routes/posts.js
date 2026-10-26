@@ -1,51 +1,74 @@
 const express = require('express');
-const { posts } = require('../data');
-// const requireRole = require('../middleware/requireRole'); // TODO: use for the hide route
-
 const router = express.Router();
+const requireAuth = require('../middleware/requireAuth');
+const requireRole = require('../middleware/requireRole');
+const { posts } = require('../data');
 
-// List posts — any authenticated user.
-router.get('/', (req, res) => {
-  return res.status(200).json(posts);
-});
-
-// Create a post — the caller becomes the author.
-router.post('/', (req, res) => {
-  const post = {
-    id: String(posts.length + 1),
-    authorId: req.user.id,
-    title: req.body?.title ?? 'Untitled',
-    hidden: false,
-  };
-  posts.push(post);
-  return res.status(201).json(post);
-});
-
-// Update a post.
-// BUG: any authenticated user can edit ANY post — this is the IDOR.
-// TODO: allow only the owner OR a moderator/admin. Return 404 if the post is missing.
-router.patch('/:id', (req, res) => {
-  const post = posts.find((p) => p.id === req.params.id);
-  post.title = req.body?.title ?? post.title;
-  return res.status(200).json(post);
-});
-
-// Delete a post.
-// BUG: same IDOR — any authenticated user can delete ANY post.
-// TODO: allow only the owner OR a moderator/admin. Return 404 if the post is missing.
-router.delete('/:id', (req, res) => {
-  const idx = posts.findIndex((p) => p.id === req.params.id);
-  posts.splice(idx, 1);
-  return res.status(200).json({ ok: true });
-});
-
-// Hide a post — should be moderator/admin only.
-// TODO: gate with requireRole('moderator', 'admin').
-router.post('/:id/hide', (req, res) => {
-  const post = posts.find((p) => p.id === req.params.id);
-  if (!post) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Post not found' } });
+// Hide post: Moderator or Admin only
+router.post('/:id/hide', requireAuth, requireRole('moderator', 'admin'), (req, res) => {
+  const post = posts.find(p => p.id === req.params.id);
+  if (!post) {
+    return res.status(404).json({
+      error: { code: 'NOT_FOUND', message: 'Post not found' }
+    });
+  }
   post.hidden = true;
-  return res.status(200).json(post);
+  res.json(post);
+});
+
+// PATCH /posts/:id — Edit post (Owner or privileged roles)
+router.patch('/:id', requireAuth, (req, res) => {
+  const post = posts.find(p => p.id === req.params.id);
+  
+  // 1. Check 404 first (must be before ownership check)
+  if (!post) {
+    return res.status(404).json({
+      error: { code: 'NOT_FOUND', message: 'Post not found' }
+    });
+  }
+
+  // 2. Check ownership or privileged roles (moderator/admin)
+  const isOwner = post.authorId === req.user.id;
+  const isPrivileged = ['moderator', 'admin'].includes(req.user.role);
+
+  if (!isOwner && !isPrivileged) {
+    return res.status(403).json({
+      error: { code: 'FORBIDDEN', message: 'You do not have permission to modify this post' }
+    });
+  }
+
+  // Update post fields
+  if (req.body.title !== undefined) post.title = req.body.title;
+  if (req.body.content !== undefined) post.content = req.body.content;
+
+  res.json(post);
+});
+
+// DELETE /posts/:id — Delete post (Owner or privileged roles)
+router.delete('/:id', requireAuth, (req, res) => {
+  const postIndex = posts.findIndex(p => p.id === req.params.id);
+  
+  // 1. Check 404 first (must be before ownership check)
+  if (postIndex === -1) {
+    return res.status(404).json({
+      error: { code: 'NOT_FOUND', message: 'Post not found' }
+    });
+  }
+
+  const post = posts[postIndex];
+
+  // 2. Check ownership or privileged roles
+  const isOwner = post.authorId === req.user.id;
+  const isPrivileged = ['moderator', 'admin'].includes(req.user.role);
+
+  if (!isOwner && !isPrivileged) {
+    return res.status(403).json({
+      error: { code: 'FORBIDDEN', message: 'You do not have permission to delete this post' }
+    });
+  }
+
+  posts.splice(postIndex, 1);
+  res.json({ success: true });
 });
 
 module.exports = router;
