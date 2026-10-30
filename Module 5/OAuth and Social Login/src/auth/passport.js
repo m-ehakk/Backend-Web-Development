@@ -7,7 +7,7 @@
 // exchange → userinfo fetch) by the time verifyCallback is called.
 // You receive the Google profile and must decide what user object to return.
 //
-// profile.id               → Google's stable permanent ID for this user (store as googleId)
+// profile.id             → Google's stable permanent ID for this user (store as googleId)
 // profile.emails[0].value  → the user's email address (may change; don't use as primary key)
 // profile.displayName      → their full name
 // profile._json.email_verified → boolean; only link to an existing account when true
@@ -45,8 +45,42 @@ const { users, nextId } = require('../data');
 // Hint: use Array.prototype.find() on `users`. No database, no await needed.
 // ───────────────────────────────────────────────────────────────────────────────
 async function verifyCallback(accessToken, refreshToken, profile, done) {
-  // Replace this stub with your implementation.
-  return done(null, false);
+  try {
+    const googleId = profile.id;
+    const email = profile.emails && profile.emails[0] ? profile.emails[0].value : null;
+    const name = profile.displayName || '';
+
+    // 1. RETURNING OAuth user
+    let user = users.find(u => u.googleId === googleId);
+    if (user) {
+      return done(null, user);
+    }
+
+    // 2. EXISTING local account (first-time Google login)
+    if (email) {
+      user = users.find(u => u.email === email);
+      if (user) {
+        if (!profile._json || !profile._json.email_verified) {
+          return done(null, false);
+        }
+        user.googleId = googleId;
+        return done(null, user);
+      }
+    }
+
+    // 3. BRAND-NEW user
+    const newUser = {
+      id: nextId(),
+      googleId,
+      email,
+      name,
+      role: 'member'
+    };
+    users.push(newUser);
+    return done(null, newUser);
+  } catch (err) {
+    return done(err);
+  }
 }
 
 passport.use(
